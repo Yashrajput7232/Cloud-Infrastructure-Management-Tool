@@ -6,15 +6,15 @@ import (
 	"time"
 	"net/http"
     "math/rand"
+	"io/ioutil"
 	"github.com/gin-gonic/gin"
 	"github.com/oracle/oci-go-sdk/v65/common"
 	"github.com/oracle/oci-go-sdk/v65/core"
-
-	// "github.com/oracle/oci-go-sdk/v49/identity"
+	"log"
+	"encoding/json"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
-	// "github.com/pelletier/go-toml"
 )
 
 // MongoDB connection details
@@ -31,6 +31,7 @@ type InstanceDetails struct {
 	Memory       float64 `bson:"memory"`
 	Storage      string  `bson:"storage"`
 	Pricing      float64 `bson:"pricing"`
+	LaunchedTime time.Time
 }
 func getConfigurationProvider() (common.ConfigurationProvider) {
     // ... TOML loading logic
@@ -75,107 +76,61 @@ func getAllComputeInstances(c *gin.Context) {
 		c.JSON(http.StatusOK, instances)
 	}
 	
-// getInstanceDetails gets instance details based on instance type and stores/upserts them in MongoDB.
-func getInstanceDetailsAndStore(c *gin.Context) {
-    // Get instance type from query parameter
-    // (assuming a parameter named "instanceType" is provided)
-    instanceType := c.Query("instanceType")
-
-    // Create compute client
-
-    computeClient, err := core.NewComputeClientWithConfigurationProvider(getConfigurationProvider())
-    if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create compute client"})
-        return
-    }
-
-    // Retrieve instance details
-    instanceDetails, err := getInstanceDetails(computeClient, instanceType)
-    if err != nil {
-        c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Failed to retrieve instance details: %v", err)})
-        return
-    }
-
-    // Retrieve pricing (optional)
-    // pricing, err := getPricing(instanceType) // Implement this function for pricing retrieval
-    // if err != nil {
-    //     log.Println("Failed to retrieve pricing:", err) // Log error without failing the request
-    // } else {
-    //     // instanceDetails["pricingPerHour"] = pricing
-    // }
-
-    // Connect to MongoDB
-    mongoClient, err := mongo.Connect(context.Background(), options.Client().ApplyURI(mongoURI))
-    if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to connect to MongoDB"})
-        return
-    }
-    defer mongoClient.Disconnect(context.Background())
-
-    collection := mongoClient.Database(dbName).Collection(collectionName)
-
-    // Check if instance exists in MongoDB
-    filter := bson.M{"instanceType": instanceType}
-    result := collection.FindOne(context.Background(), filter)
-
-    if result.Err() == mongo.ErrNoDocuments {
-        // Insert new instance details
-        insertResult, err := collection.InsertOne(context.Background(), instanceDetails)
-        if err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to insert instance details"})
-            return
-        }
-        c.JSON(http.StatusCreated, gin.H{"message": "Instance details stored successfully", "insertedID": insertResult.InsertedID})
-    } else {
-        // Update existing instance details
-        updateResult, err := collection.UpdateOne(context.Background(), filter, bson.M{"$set": instanceDetails})
-        if err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update instance details"})
-            return
-        }
-        c.JSON(http.StatusOK, gin.H{"message": "Instance details updated successfully", "matchedCount": updateResult.MatchedCount, "modifiedCount": updateResult.ModifiedCount})
-    }
-}
 
 // Implement getInstanceDetails to retrieve instance details from OCI
-func getInstanceDetails(computeClient core.ComputeClient, instanceType string) (*InstanceDetails, error) {
-    // Fetch shape details
-	shapeRequest := core.ListShapesRequest{}
+func getInstanceDetails(c *gin.Context) {
+    instanceType := c.Query("instanceType")
+	configProvider:=getConfigurationProvider()
+	compute, err := core.NewComputeClientWithConfigurationProvider(configProvider)
+		if err != nil {
+			c.JSON(500, gin.H{"error": fmt.Sprintf("failed to create Compute client: %v", err)})
+			return
+		}
 
-    shapeRequest := core.ListShapesRequest{}
-    shapeResponse, err := computeClient.ListShapes(context.Background(), shapeRequest)
-	shapeRequest := core.GetShapeRequest{ShapeName: &instanceType}
-    shapeResponse, err := computeClient.GetShape(context.Background(), shapeRequest)
+    // Retrieve instance details from OCI Compute
+    shape, err := compute.GetShape(context.Background(), compute.GetShapeInput{
+        ShapeName: &instanceType,
+    })
     if err != nil {
-        return nil, fmt.Errorf("failed to get shape details: %w", err)
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve instance details"})
+        return
     }
 
-    // Map fields to InstanceDetails struct
-    instanceDetails := &InstanceDetails{
-        InstanceType: shapeResponse.Shape.Name,
-        CPUType:      shapeResponse.Shape.Ocpus ,
-        GPUType:      shapeResponse.Shape.Gpu.GPUType,
-        GPUCount:     shapeResponse.Shape.Gpu.GPUCount,
-        Memory:       shapeResponse.Shape.MemoryInGBs,
-        Storage:      fmt.Sprintf("%.2f GB", shapeResponse.Shape.StorageInGBs), // Format storage as string
+    // Extract relevant details
+    cpuType := shape.ProcessorDescription
+    gpuType := shape.GpuDescription
+    gpuCount := shape.GpuCount
+    memory := shape.MemoryInGBs
+    storage := shape.BaseShape.StorageInGBs
+
+    // Retrieve pricing per hour
+    pricing, err := getPricing(compute,instanceType)
+    if err != nil {
+        log.Printf("Error retrieving pricing: %v", err)
+        pricing = 0.0 // Set a placeholder in case of error
     }
 
-    // Get pricing (optional)
-    // pricing, err := getPricing(computeClient , instanceType)
-    // if err != nil {
-    //     log.Println("Failed to retrieve pricing:", err) // Log error without failing the request
-    // } else {
-    //     instanceDetails.Pricing = pricing
-    // }
+    // Create InstanceDetails object
+    details := InstanceDetails{
+        InstanceType: instanceType,
+        CPUType:      cpuType,
+        GPUType:      gpuType,
+        GPUCount:     gpuCount,
+        Memory:       memory,
+        Storage:      storage,
+        Pricing:      pricing,
+    }
 
-    return instanceDetails, nil
+    // Store details in MongoDB
+    err = storeInstanceDetails(details)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to store instance details in MongoDB"})
+        return
+    }
+
+    c.JSON(http.StatusOK, gin.H{"message": "Instance details retrieved and stored successfully"})
 }
 
-
-// Implement getPricing to retrieve pricing information (optional)
-
-
-// storeInstanceDetails stores or updates instance details in MongoDB.
 func storeInstanceDetails(details InstanceDetails) error {
 	// Create a MongoDB client
 	client, err := mongo.Connect(context.TODO(), options.Client().ApplyURI(mongoURI))
@@ -216,16 +171,20 @@ func storeInstanceDetails(details InstanceDetails) error {
 	return nil
 }
 
-func startComputeInstance1(c *gin.Context){
+
+func startComputeInstance(c *gin.Context) {
 	instanceShape:=c.Query("instanceType")
 	compartmentID:=c.Query("comaprtmentId")
 	availabilityDomain:=c.Query("ad")
 	imageID:=c.Query("image_id")
-	client, err := core.NewComputeClientWithConfigurationProvider(common.DefaultConfigProvider())
+	configPath := "/workspaces/Cloud-Infrastructure-Management-Tool/compute-service/config.toml" // Replace with your config path
+	configProvider, err := common.ConfigurationProviderFromFile(configPath, "DEFAULT")
 	if err != nil {
-		fmt.Println("Error:", err)
+		c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to load config: %v", err)})
 		return
 	}
+	
+	port := 9000 + rand.Intn(101)
 
 	request := core.LaunchInstanceRequest{
 		LaunchInstanceDetails: core.LaunchInstanceDetails{
@@ -237,23 +196,6 @@ func startComputeInstance1(c *gin.Context){
 		},
 	}
 
-	resp, err := client.LaunchInstance(context.Background(), request)
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
-
-	instance := resp.Instance
-	fmt.Println("Instance ID:", *instance.Id)
-}
-func startComputeInstance(c *gin.Context) {
-	instanceShape:=c.Query("instanceType")
-	configPath := "/workspaces/Cloud-Infrastructure-Management-Tool/compute-service/config.toml" // Replace with your config path
-	configProvider, err := common.ConfigurationProviderFromFile(configPath, "DEFAULT")
-	if err != nil {
-		c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to load config: %v", err)})
-		return
-	}
 
 	// Create Compute client
 	computeClient, err := core.NewComputeClientWithConfigurationProvider(configProvider)
@@ -270,18 +212,9 @@ func startComputeInstance(c *gin.Context) {
 	}
 	defer client.Disconnect(context.Background())
 
-	// Generate a random port number between 9000 and 9100
-	port := 9000 + rand.Intn(101)
-
-	// Set up instance launch request
-	launchRequest := core.LaunchInstanceRequest{
-		Shape : instanceShape, // Replace with your instance shape
-		// ... configure other request fields, including network security rules
-		// ... and environment variable setup
-	}
-
+	
 	// Send request to Oracle Cloud API to launch an instance
-	launchResponse, err := computeClient.LaunchInstance(context.Background(), launchRequest)
+	launchResponse, err := computeClient.LaunchInstance(context.Background(), request)
 	if err != nil {
 		c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to launch instance: %v", err)})
 		return
@@ -295,10 +228,11 @@ func startComputeInstance(c *gin.Context) {
 		"LaunchedTime":   time.Now().Format(time.RFC3339),
 		"Status":         "launched",
 		"Port":           port,
+		
 	}
 
 	// Store instance information in MongoDB
-	collection := client.Database("your-database-name").Collection("your-collection-name") // Replace with your database and collection names
+	collection := client.Database(dbName).Collection(collectionName) // Replace with your database and collection names
 	_, err = collection.InsertOne(context.Background(), instanceInfo)
 	if err != nil {
 		c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to insert into MongoDB: %v", err)})
@@ -361,6 +295,83 @@ func terminateComputeInstance(c *gin.Context) {
 
 	c.JSON(200, gin.H{"message": "Instance terminated successfully", "status": status, "cost": cost})
 }
-func calculateCost(instanceid string ){
+func calculateCost(instanceID string) float64 {
+    // Connect to MongoDB
+    client, err := mongo.Connect(context.Background(), options.Client().ApplyURI(mongoURI))
+    if err != nil {
+        fmt.Println("Error connecting to MongoDB:", err)
+        return 0 // Return a placeholder cost in case of error
+    }
+    defer client.Disconnect(context.Background())
 
+    // Fetch instance details from MongoDB
+    collection := client.Database(dbName).Collection(collectionName)
+    filter := bson.M{"instanceId": instanceID}
+    var instanceDetails InstanceDetails
+    err = collection.FindOne(context.Background(), filter).Decode(&instanceDetails)
+    if err != nil {
+        fmt.Println("Error fetching instance details from MongoDB:", err)
+        return 0 // Return a placeholder cost in case of error
+    }
+
+    // Calculate cost based on pricing and running time
+    // runningTime := time.Now().Sub(time.Parse(time.RFC3339, instanceDetails.LaunchedTime))
+    // launchedTime, err := time.Parse(time.RFC3339, instanceDetails.LaunchedTime)
+	launchedTime := instanceDetails.LaunchedTime // directly use the time.Time value
+	runningTime := time.Now().Sub(launchedTime)
+	cost := instanceDetails.Pricing * runningTime.Hours()
+	if err != nil {
+		fmt.Println("Error parsing launched time:", err)
+		// Handle the error appropriately, e.g., return a placeholder value or abort calculation
 }
+    return cost
+}
+
+
+func getPricing(computeClient core.ComputeClient, instanceType string) (float64, error) {
+    // Check if pricing is already stored in MongoDB (optional optimization)
+  
+
+    // Make API call to fetch pricing
+    client := http.Client{} // Create an HTTP client
+    req, err := http.NewRequest("GET", "https://apexapps.oracle.com/pls/apex/cetools/api/v1/products/", nil)
+    if err != nil {
+        return 0, fmt.Errorf("failed to create API request: %w", err)
+    }
+    q := req.URL.Query()
+    q.Add("partNumber", instanceType) // Filter by instance type
+    req.URL.RawQuery = q.Encode()
+
+    resp, err := client.Do(req)
+    if err != nil {
+        return 0, fmt.Errorf("failed to fetch pricing from API: %w", err)
+    }
+    defer resp.Body.Close()
+
+    // Parse JSON response
+    body, err := ioutil.ReadAll(resp.Body)
+    if err != nil {
+        return 0, fmt.Errorf("failed to read API response body: %w", err)
+    }
+    var pricingData []map[string]interface{}
+    err = json.Unmarshal(body, &pricingData)
+    if err != nil {
+        return 0, fmt.Errorf("failed to unmarshal API response: %w", err)
+    }
+
+    // Extract hourly price
+    hourlyPrice := 0.0
+    for _, item := range pricingData {
+        if item["partNumber"] == instanceType {
+            hourlyPrice = item["prices"].([]interface{})[0].(map[string]interface{})["value"].(float64)
+            break
+        }
+    }
+
+    if hourlyPrice == 0 {
+        return 0, fmt.Errorf("pricing not found for instance type %s", instanceType)
+    }
+
+    return hourlyPrice, nil
+}
+
