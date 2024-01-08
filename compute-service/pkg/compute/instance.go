@@ -18,7 +18,7 @@ import (
 )
 
 // MongoDB connection details
-var mongoURI = "mongodb+srv://yash7232:Yash%407232@cluster0.kn66rfv.mongodb.net/?retryWrites=true&w=majority"
+var mongoURI = "mongodb+srv://username:passwordcluster0.kn66rfv.mongodb.net/?retryWrites=true&w=majority"
 var dbName = "computeServiceDB"
 var collectionName = "instanceDetails"
 
@@ -140,24 +140,24 @@ func getInstanceDetailsAndStore(c *gin.Context) {
 // Implement getInstanceDetails to retrieve instance details from OCI
 func getInstanceDetails(computeClient core.ComputeClient, instanceType string) (*InstanceDetails, error) {
     // Fetch shape details
-	// shapeRequest := core.ListShapesRequest{}
+	shapeRequest := core.ListShapesRequest{}
 
-    // shapeRequest := core.ListShapesRequest{}
-    // shapeResponse, err := computeClient.ListShapes(context.Background(), shapeRequest)
-	// shapeRequest := core.GetShapeRequest{ShapeName: &instanceType}
-    // shapeResponse, err := computeClient.GetShape(context.Background(), shapeRequest)
-    // if err != nil {
-    //     return nil, fmt.Errorf("failed to get shape details: %w", err)
-    // }
+    shapeRequest := core.ListShapesRequest{}
+    shapeResponse, err := computeClient.ListShapes(context.Background(), shapeRequest)
+	shapeRequest := core.GetShapeRequest{ShapeName: &instanceType}
+    shapeResponse, err := computeClient.GetShape(context.Background(), shapeRequest)
+    if err != nil {
+        return nil, fmt.Errorf("failed to get shape details: %w", err)
+    }
 
     // Map fields to InstanceDetails struct
     instanceDetails := &InstanceDetails{
-        // InstanceType: shapeResponse.Shape.Name,
-        // CPUType:      shapeResponse.Shape.Ocpus ,
-        // GPUType:      shapeResponse.Shape.Gpu.GPUType,
-        // GPUCount:     shapeResponse.Shape.Gpu.GPUCount,
-        // Memory:       shapeResponse.Shape.MemoryInGBs,
-        // Storage:      fmt.Sprintf("%.2f GB", shapeResponse.Shape.StorageInGBs), // Format storage as string
+        InstanceType: shapeResponse.Shape.Name,
+        CPUType:      shapeResponse.Shape.Ocpus ,
+        GPUType:      shapeResponse.Shape.Gpu.GPUType,
+        GPUCount:     shapeResponse.Shape.Gpu.GPUCount,
+        Memory:       shapeResponse.Shape.MemoryInGBs,
+        Storage:      fmt.Sprintf("%.2f GB", shapeResponse.Shape.StorageInGBs), // Format storage as string
     }
 
     // Get pricing (optional)
@@ -216,7 +216,36 @@ func storeInstanceDetails(details InstanceDetails) error {
 	return nil
 }
 
+func startComputeInstance1(c *gin.Context){
+	instanceShape:=c.Query("instanceType")
+	compartmentID:=c.Query("comaprtmentId")
+	availabilityDomain:=c.Query("ad")
+	imageID:=c.Query("image_id")
+	client, err := core.NewComputeClientWithConfigurationProvider(common.DefaultConfigProvider())
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
 
+	request := core.LaunchInstanceRequest{
+		LaunchInstanceDetails: core.LaunchInstanceDetails{
+			CompartmentId:       &compartmentID,
+			AvailabilityDomain:  &availabilityDomain,
+			ImageId:             &imageID,
+			Shape:               &instanceShape,
+			// Add more parameters as needed
+		},
+	}
+
+	resp, err := client.LaunchInstance(context.Background(), request)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	instance := resp.Instance
+	fmt.Println("Instance ID:", *instance.Id)
+}
 func startComputeInstance(c *gin.Context) {
 	instanceShape:=c.Query("instanceType")
 	configPath := "/workspaces/Cloud-Infrastructure-Management-Tool/compute-service/config.toml" // Replace with your config path
@@ -319,7 +348,7 @@ func terminateComputeInstance(c *gin.Context) {
 
 	// Mark the status as terminated and calculate cost
 	status := "terminated"
-	// cost := calculateCost(instanceID) // You need to implement the calculateCost function
+	cost := calculateCost(instanceID) // You need to implement the calculateCost function
 
 	// Update the instance information in MongoDB
 	collection := client.Database("your-database-name").Collection("your-collection-name") // Replace with your database and collection names
@@ -332,8 +361,6 @@ func terminateComputeInstance(c *gin.Context) {
 
 	c.JSON(200, gin.H{"message": "Instance terminated successfully", "status": status, "cost": cost})
 }
+func calculateCost(instanceid string ){
 
-// Calculate cost function (implement your logic here)
-
-
-// Other compute-related functions
+}
