@@ -244,6 +244,7 @@ func startComputeInstance(c *gin.Context) {
 
 
 func terminateComputeInstance(c *gin.Context) {
+
 	configPath := "/workspaces/Cloud-Infrastructure-Management-Tool/compute-service/config.toml" // Replace with your config path
 	configProvider, err := common.ConfigurationProviderFromFile(configPath, "DEFAULT")
 	if err != nil {
@@ -267,7 +268,7 @@ func terminateComputeInstance(c *gin.Context) {
 	defer client.Disconnect(context.Background())
 
 	// Extract instance ID from the request parameters
-	instanceID := c.Param("instanceID")
+	instanceID := c.Query("instanceID")
 
 	// Terminate the compute instance
 	terminateRequest := core.TerminateInstanceRequest{
