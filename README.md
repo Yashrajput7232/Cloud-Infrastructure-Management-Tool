@@ -26,6 +26,23 @@ This project provides a Go-based solution for managing compute services. It is o
         - `instance.go`: Functions related to compute instances.
 - `go.mod` and `go.sum`: Go module files.
 
+
+## Config for oci sdk
+ - you can make the a config.toml file as shown below
+```bash 
+    [DEFAULT]
+    user=ocid1.user.oc1..<unique_ID>
+    fingerprint=<your_fingerprint>
+    key_file=~/.oci/oci_api_key.pem
+    tenancy=ocid1.tenancy.oc1..<unique_ID>
+    region=us-ashburn-1
+    compartment_id ="your-compartment-id"
+```
+ - OR
+    you can install OCI CLI and configure it 
+    more inforamtion on this [link](https://docs.oracle.com/en-us/iaas/Content/API/SDKDocs/cliconfigure.htm)
+
+
 ## Usage
 
 1. **Run the Application:**
