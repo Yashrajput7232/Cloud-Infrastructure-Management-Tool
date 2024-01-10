@@ -2,14 +2,7 @@
 
 This tool provides a microservice with a REST API for integrating compute resources from Oracle Cloud Infrastructure. It's implemented in Go using the Gin framework and interacts with MongoDB to store and retrieve instance details.
 
-## Project Structure
 
-
-ChatGPT
-Certainly! Here's a README template for your project structure:
-
-markdown
-Copy code
 # Project Name
 
 This project provides a Go-based solution for managing compute services. It is organized into different packages for clarity and modularity.
